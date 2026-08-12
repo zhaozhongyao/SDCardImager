@@ -1,0 +1,16 @@
+# Node
+node_modules/
+dist/
+
+# Rust
+src-tauri/target/
+src-tauri/gen/
+
+# Build artifacts
+src-tauri/binaries/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
