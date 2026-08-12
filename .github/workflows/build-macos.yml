@@ -1,0 +1,52 @@
+name: Build macOS DMG
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build helper sidecar
+        run: |
+          cd src-tauri
+          cargo build --release -p flash-helper
+          TRIPLE=$(rustc -vV | sed -n 's/.*host: \(.*\)/\1/p')
+          mkdir -p binaries
+          cp target/release/flash-helper "binaries/flash-helper-${TRIPLE}"
+          echo "Sidecar triple: ${TRIPLE}"
+
+      - name: Build and bundle (DMG)
+        run: pnpm tauri build
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SDCardImager-macos
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app
+          if-no-files-found: error
