@@ -74,7 +74,8 @@ pub fn ensure_helper_daemon() -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        // 通过 pkexec（PolicyKit）提权启动守护进程（root 权限写块设备）
+        // 尝试 pkexec（PolicyKit）自动提权启动守护进程；
+        // 失败/超时则引导用户手动 sudo 启动（可靠，跨桌面环境）
         let _ = std::fs::remove_file(pid_file());
         let spawned = Command::new("pkexec")
             .arg(&helper)
@@ -82,16 +83,18 @@ pub fn ensure_helper_daemon() -> Result<(), String> {
             .spawn();
         match spawned {
             Ok(_) => {
-                for _ in 0..40 {
+                for _ in 0..30 {
                     if daemon_alive() {
                         return Ok(());
                     }
                     std::thread::sleep(std::time::Duration::from_millis(500));
                 }
-                Err("等待授权超时，请确认 pkexec/PolicyKit 可用，或在终端执行 sudo {helper} serve 手动启动".to_string())
+                Err(format!(
+                    "等待授权超时。\n\n若系统未弹出授权窗口，请在终端手动执行以下命令启动守护进程：\n\nsudo {helper} serve\n\n启动完成后返回本窗口重新操作。"
+                ))
             }
             Err(e) => Err(format!(
-                "无法启动提权进程（pkexec 不可用: {e}）。请在终端执行：sudo {helper} serve"
+                "无法启动提权进程（pkexec 不可用: {e}）。请在终端执行：\n\nsudo {helper} serve"
             )),
         }
     }
