@@ -50,6 +50,9 @@ pub fn list_devices() -> Result<Vec<Device>, String> {
 
         let size_sectors = read_u64(&base.join("size")).unwrap_or(0);
         let size_bytes = size_sectors.saturating_mul(512);
+        if size_bytes == 0 {
+            continue; // 空读卡器（无媒体）
+        }
 
         let vendor = read_str(&base.join("device/vendor"));
         let model = read_str(&base.join("device/model"));
@@ -102,4 +105,15 @@ pub fn list_devices() -> Result<Vec<Device>, String> {
 
     devices.sort_by_key(|d| d.device_path.clone());
     Ok(devices)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn enumerate_devices() {
+        let devices = super::list_devices().unwrap();
+        for d in &devices {
+            println!("{:?}", d);
+        }
+    }
 }
