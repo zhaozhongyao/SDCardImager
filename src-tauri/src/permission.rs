@@ -72,7 +72,31 @@ pub fn ensure_helper_daemon() -> Result<(), String> {
         return Err("等待管理员授权超时，请检查 UAC 对话框".to_string());
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        // 通过 pkexec（PolicyKit）提权启动守护进程（root 权限写块设备）
+        let _ = std::fs::remove_file(pid_file());
+        let spawned = Command::new("pkexec")
+            .arg(&helper)
+            .arg("serve")
+            .spawn();
+        match spawned {
+            Ok(_) => {
+                for _ in 0..40 {
+                    if daemon_alive() {
+                        return Ok(());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                Err("等待授权超时，请确认 pkexec/PolicyKit 可用，或在终端执行 sudo {helper} serve 手动启动".to_string())
+            }
+            Err(e) => Err(format!(
+                "无法启动提权进程（pkexec 不可用: {e}）。请在终端执行：sudo {helper} serve"
+            )),
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = &helper;
         Err("此平台暂不支持权限守护进程".to_string())

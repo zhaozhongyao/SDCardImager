@@ -538,7 +538,30 @@ fn unmount_device(_device_path: &str) {
     // 若 WriteFile 因卷占用失败会返回明确错误提示
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+/// Linux：卸载设备上的所有挂载分区（umount，daemon 以 root 运行）
+#[cfg(target_os = "linux")]
+fn unmount_device(device_path: &str) {
+    // 设备名如 /dev/sdb -> 分区 /dev/sdb1.. 或 mmcblk0p1
+    if let Ok(entries) = std::fs::read_dir("/dev") {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name == dev_basename(device_path) {
+                continue;
+            }
+            if name.starts_with(dev_basename(device_path)) {
+                let part = format!("/dev/{}", name);
+                let _ = Command::new("umount").arg(&part).output();
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn dev_basename(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).to_string()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn unmount_device(_device_path: &str) {}
 
 /// 通过 diskutil（Apple 二进制）获取设备大小，避免直接 open 设备被 TCC 拦截
@@ -620,7 +643,21 @@ fn device_size(device_path: &str) -> Result<u64, String> {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+/// Linux：通过 ioctl(BLKGETSIZE64) 获取块设备大小
+#[cfg(target_os = "linux")]
+fn device_size(device_path: &str) -> Result<u64, String> {
+    use std::os::unix::io::AsRawFd;
+    let f = File::open(device_path).map_err(|e| format!("无法打开设备 {device_path}: {e}"))?;
+    let mut size: u64 = 0;
+    // BLKGETSIZE64 = 0x80081272
+    let r = unsafe { libc::ioctl(f.as_raw_fd(), 0x80081272u64, &mut size) };
+    if r != 0 {
+        return Err("无法获取设备大小（BLKGETSIZE64 失败）".to_string());
+    }
+    Ok(size)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn device_size(_path: &str) -> Result<u64, String> {
     Err("此平台暂不支持导出功能".to_string())
 }
