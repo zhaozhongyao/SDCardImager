@@ -205,10 +205,29 @@ fn check_cancelled(task_id: &str, log: &str) -> Result<(), String> {
 
 /// 单实例保护：如果已有存活实例（pid 文件中的进程仍存在），当前实例退出
 fn claim_single_instance() -> bool {
-    if let Ok(content) = std::fs::read_to_string(pid_path().to_string_lossy().into_owned()) {
-        if let Ok(pid) = content.trim().parse::<i32>() {
-            if pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0 {
-                return false;
+    if let Ok(content) = std::fs::read_to_string(pid_path()) {
+        if let Ok(pid) = content.trim().parse::<u32>() {
+            if pid != std::process::id() {
+                #[cfg(unix)]
+                {
+                    if unsafe { libc::kill(pid as i32, 0) } == 0 {
+                        return false;
+                    }
+                }
+                #[cfg(windows)]
+                {
+                    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+                    use windows_sys::Win32::System::Threading::{
+                        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+                    };
+                    unsafe {
+                        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                        if h != INVALID_HANDLE_VALUE {
+                            let _ = CloseHandle(h);
+                            return false;
+                        }
+                    }
+                }
             }
         }
     }
@@ -557,11 +576,12 @@ fn device_size(device_path: &str) -> Result<u64, String> {
 /// Windows：通过 IOCTL_DISK_GET_LENGTH_INFO 获取磁盘大小
 #[cfg(target_os = "windows")]
 fn device_size(device_path: &str) -> Result<u64, String> {
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, HANDLE};
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, DeviceIoControl, GENERIC_READ, OPEN_EXISTING, FILE_SHARE_READ,
-        FILE_SHARE_WRITE,
+        CreateFileW, OPEN_EXISTING, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
+    use windows_sys::Win32::System::IO::GENERIC_READ;
+    use windows_sys::Win32::System::Ioctl::DeviceIoControl;
     unsafe {
         let wide: Vec<u16> = device_path
             .encode_utf16()

@@ -5,10 +5,11 @@ use std::os::windows::fs::OpenOptionsExt;
 
 use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, HANDLE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, DeviceIoControl, GENERIC_READ, OPEN_EXISTING, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    STORAGE_PROPERTY_QUERY, STORAGE_DEVICE_DESCRIPTOR,
+    CreateFileW, OPEN_EXISTING, FILE_SHARE_READ, FILE_SHARE_WRITE, STORAGE_PROPERTY_QUERY,
+    STORAGE_DEVICE_DESCRIPTOR,
 };
-use windows_sys::Win32::System::Ioctl::IOCTL_STORAGE_QUERY_PROPERTY;
+use windows_sys::Win32::System::IO::GENERIC_READ;
+use windows_sys::Win32::System::Ioctl::{DeviceIoControl, IOCTL_STORAGE_QUERY_PROPERTY};
 
 const MAX_DISKS: u32 = 32;
 const SECTOR: u64 = 512;
