@@ -85,6 +85,7 @@ pub fn list_devices() -> Result<Vec<Device>, String> {
 
         let device_path = format!("/dev/{}", name);
         let display_name = model
+            .clone()
             .filter(|m| !m.is_empty() && m != "Unknown")
             .unwrap_or_else(|| device_path.clone());
         devices.push(Device {
