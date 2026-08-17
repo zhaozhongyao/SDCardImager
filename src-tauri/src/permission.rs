@@ -1,40 +1,113 @@
 use std::path::Path;
 use std::process::Command;
 
-const DAEMON_PID_FILE: &str = "/tmp/flash-helper.pid";
-
-/// 架构说明（macOS 15）：
-/// 写入块设备需要"完全磁盘访问权限"(FDA)。osascript 提权与 launchd daemon
-/// 启动的 root 进程都没有 FDA，无法访问 /dev/rdisk*。
-/// 可靠方案：守护进程从已获 FDA 的终端会话启动（sudo nohup ... serve），
-/// 继承终端的 FDA。GUI 检测守护进程不在时，引导用户手动运行启动命令。
+/// 守护进程 pid 文件路径（macOS 固定 /tmp，与其他平台共享一致约定）
+fn pid_file() -> std::path::PathBuf {
+    if cfg!(target_os = "macos") {
+        std::path::PathBuf::from("/tmp/flash-helper.pid")
+    } else {
+        std::env::temp_dir().join("flash-helper.pid")
+    }
+}
 
 /// 检测守护进程是否存活。
-/// 注意：不能用 kill(pid, 0)，macOS 上普通用户对 root 进程调用会返回 EPERM；
-/// 用 ps 检测进程存在性（普通用户可执行）。
+/// macOS：ps 检测（kill -0 对 root 进程会 EPERM）
+/// Windows：OpenProcess 检测进程存在性
 pub fn daemon_alive() -> bool {
-    if let Ok(content) = std::fs::read_to_string(DAEMON_PID_FILE) {
-        if let Ok(pid) = content.trim().parse::<i32>() {
-            if let Ok(out) = Command::new("ps")
-                .args(["-p", &pid.to_string(), "-o", "pid="])
-                .output()
+    if let Ok(content) = std::fs::read_to_string(pid_file()) {
+        if let Ok(pid) = content.trim().parse::<u32>() {
+            #[cfg(target_os = "macos")]
             {
-                return !String::from_utf8_lossy(&out.stdout).trim().is_empty();
+                if let Ok(out) = Command::new("ps")
+                    .args(["-p", &pid.to_string(), "-o", "pid="])
+                    .output()
+                {
+                    return !String::from_utf8_lossy(&out.stdout).trim().is_empty();
+                }
+            }
+            #[cfg(target_os = "windows")]
+            {
+                use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+                use windows_sys::Win32::System::Threading::{
+                    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+                };
+                unsafe {
+                    let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                    if h != INVALID_HANDLE_VALUE {
+                        let _ = CloseHandle(h);
+                        return true;
+                    }
+                }
             }
         }
     }
     false
 }
 
-/// 确保守护进程在运行；不在时返回带启动指引的错误信息
+/// 确保守护进程在运行。
+/// macOS：引导用户从已获 FDA 的终端手动启动（写入块设备需要完全磁盘访问权限）
+/// Windows：通过 ShellExecuteW(runas) 弹 UAC 提权启动（管理员权限即可写设备）
 pub fn ensure_helper_daemon() -> Result<(), String> {
     if daemon_alive() {
         return Ok(());
     }
     let helper = helper_path()?;
-    Err(format!(
-        "权限守护进程未运行。\n\n请在终端中执行以下命令启动它（需要输入一次密码）：\n\nsudo nohup {helper} serve >/dev/null 2>&1 &\n\n启动完成后返回本窗口重新操作。"
-    ))
+
+    #[cfg(target_os = "macos")]
+    {
+        return Err(format!(
+            "权限守护进程未运行。\n\n请在终端中执行以下命令启动它（需要输入一次密码）：\n\nsudo nohup {helper} serve >/dev/null 2>&1 &\n\n启动完成后返回本窗口重新操作。"
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        spawn_windows_daemon(&helper)?;
+        for _ in 0..40 {
+            if daemon_alive() {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        return Err("等待管理员授权超时，请检查 UAC 对话框".to_string());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = &helper;
+        Err("此平台暂不支持权限守护进程".to_string())
+    }
+}
+
+/// Windows：通过 ShellExecuteW 以 runas（UAC 提权）启动 flash-helper serve
+#[cfg(target_os = "windows")]
+fn spawn_windows_daemon(helper: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::{ShellExecuteW, SW_HIDE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SE_ERR_ACCESSDENIED;
+
+    let _ = std::fs::remove_file(pid_file());
+    let exe: Vec<u16> = helper.encode_utf16().chain(std::iter::once(0)).collect();
+    let args: Vec<u16> = "serve".encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let r = ShellExecuteW(
+            std::ptr::null_mut(),
+            wide_str("runas").as_ptr(),
+            exe.as_ptr(),
+            args.as_ptr(),
+            std::ptr::null(),
+            SW_HIDE as i32,
+        );
+        if r as isize <= 32 {
+            let _ = SE_ERR_ACCESSDENIED;
+            return Err("无法启动提权进程（UAC 被拒绝或 ShellExecute 失败）".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn wide_str(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 fn helper_path() -> Result<String, String> {

@@ -22,7 +22,7 @@ pub fn run() {
         ])
         .setup(|app| {
             // 清理上次运行遗留的取消信号文件
-            if let Ok(entries) = std::fs::read_dir("/tmp") {
+            if let Ok(entries) = std::fs::read_dir(engine::work_dir()) {
                 for e in entries.flatten() {
                     let name = e.file_name().to_string_lossy().into_owned();
                     if name.starts_with("flash-cancel-") {
@@ -72,7 +72,7 @@ fn ensure_privileges() -> Result<bool, String> {
 #[tauri::command]
 fn cancel_tasks(task_ids: Vec<u64>) -> Result<(), String> {
     for id in task_ids {
-        let _ = std::fs::write(format!("/tmp/flash-cancel-{id}"), "1");
+        let _ = std::fs::write(engine::work_dir().join(format!("flash-cancel-{id}")), "1");
     }
     Ok(())
 }

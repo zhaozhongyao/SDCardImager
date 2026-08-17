@@ -16,8 +16,8 @@ pub fn flash(handle: &AppHandle, task: &QueuedTask) -> Result<PollOutcome, Strin
 
     permission::ensure_helper_daemon()?;
 
-    let log_path: PathBuf = PathBuf::from("/tmp").join(format!("flash-helper-{}.jsonl", task.id));
-    let task_path: PathBuf = PathBuf::from("/tmp").join(format!("flash-task-{}.json", task.id));
+    let log_path: PathBuf = super::work_dir().join(format!("flash-helper-{}.jsonl", task.id));
+    let task_path: PathBuf = super::work_dir().join(format!("flash-task-{}.json", task.id));
     let _ = std::fs::remove_file(&log_path);
     let _ = std::fs::write(&log_path, "");
 
@@ -37,6 +37,6 @@ pub fn flash(handle: &AppHandle, task: &QueuedTask) -> Result<PollOutcome, Strin
     eprintln!("flash: poll result: {:?}", result);
 
     let _ = std::fs::remove_file(&task_path);
-    let _ = std::fs::remove_file(format!("/tmp/flash-cancel-{}", task.id));
+    let _ = std::fs::remove_file(super::work_dir().join(format!("flash-cancel-{}", task.id)));
     result
 }

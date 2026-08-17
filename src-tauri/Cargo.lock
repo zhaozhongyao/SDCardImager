@@ -805,6 +805,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "serde_json",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2685,6 +2686,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -9,6 +9,19 @@ const SEG_BLOCKS: u64 = 16;
 const MAX_CONCURRENT: usize = 3;
 const CANCELLED: &str = "__CANCELLED__";
 
+/// 任务/日志/信号文件共享目录（与主程序约定一致）
+fn work_dir() -> std::path::PathBuf {
+    if cfg!(target_os = "macos") {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
+fn pid_path() -> std::path::PathBuf {
+    work_dir().join("flash-helper.pid")
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
 
@@ -51,9 +64,9 @@ fn serve() -> ExitCode {
     if !claim_single_instance() {
         return ExitCode::SUCCESS;
     }
-    let _ = std::fs::write("/tmp/flash-helper.pid", std::process::id().to_string());
-    let daemon_log = "/tmp/flash-helper-daemon.log";
-    let _ = log_line(daemon_log, &json!({"event": "serve-start", "pid": std::process::id()}));
+    let _ = std::fs::write(pid_path().to_string_lossy().into_owned(), std::process::id().to_string());
+    let daemon_log = work_dir().join("flash-helper-daemon.log").to_string_lossy().into_owned();
+    let _ = log_line(daemon_log.as_str(), &json!({"event": "serve-start", "pid": std::process::id()}));
 
     let mut last_pid_write = std::time::Instant::now();
     let mut last_bin_check = std::time::Instant::now();
@@ -64,7 +77,7 @@ fn serve() -> ExitCode {
         .and_then(|m| m.modified().ok());
     loop {
         if last_pid_write.elapsed().as_secs() >= 5 {
-            let _ = std::fs::write("/tmp/flash-helper.pid", std::process::id().to_string());
+            let _ = std::fs::write(pid_path().to_string_lossy().into_owned(), std::process::id().to_string());
             last_pid_write = std::time::Instant::now();
         }
 
@@ -74,10 +87,10 @@ fn serve() -> ExitCode {
                     if let Ok(now_m) = md.modified() {
                         if now_m != started {
                             let _ = log_line(
-                                &daemon_log,
+                                daemon_log.as_str(),
                                 &json!({"event": "self-restart"}),
                             );
-                            let _ = std::fs::remove_file("/tmp/flash-helper.pid");
+                            let _ = std::fs::remove_file(pid_path().to_string_lossy().into_owned());
                             let _ = Command::new(exe).arg("serve").spawn();
                             return ExitCode::SUCCESS;
                         }
@@ -89,7 +102,7 @@ fn serve() -> ExitCode {
 
         let max_concurrent = {
             let mut c = MAX_CONCURRENT;
-            if let Ok(content) = std::fs::read_to_string("/tmp/flash-concurrency") {
+            if let Ok(content) = std::fs::read_to_string(work_dir().join("flash-concurrency")) {
                 if let Ok(n) = content.trim().parse::<usize>() {
                     c = n.clamp(1, 8);
                 }
@@ -99,7 +112,7 @@ fn serve() -> ExitCode {
         let processing_count = count_processing_tasks();
         if processing_count < max_concurrent {
             let slots = max_concurrent - processing_count;
-            let candidates: Vec<std::path::PathBuf> = if let Ok(entries) = std::fs::read_dir("/tmp") {
+            let candidates: Vec<std::path::PathBuf> = if let Ok(entries) = std::fs::read_dir(work_dir()) {
                 entries
                     .flatten()
                     .map(|e| e.path())
@@ -117,7 +130,7 @@ fn serve() -> ExitCode {
                 let processing = task.with_extension("processing");
                 if std::fs::rename(&task, &processing).is_ok() {
                     let _ = log_line(
-                        &daemon_log,
+                        daemon_log.as_str(),
                         &json!({"event": "task-picked", "file": processing.display().to_string()}),
                     );
                     std::thread::spawn(move || handle_task(processing));
@@ -130,7 +143,7 @@ fn serve() -> ExitCode {
 }
 
 fn count_processing_tasks() -> usize {
-    if let Ok(entries) = std::fs::read_dir("/tmp") {
+    if let Ok(entries) = std::fs::read_dir(work_dir()) {
         return entries
             .flatten()
             .filter(|e| {
@@ -143,7 +156,7 @@ fn count_processing_tasks() -> usize {
 }
 
 fn handle_task(processing: std::path::PathBuf) {
-    let daemon_log = "/tmp/flash-helper-daemon.log";
+    let daemon_log = work_dir().join("flash-helper-daemon.log").to_string_lossy().into_owned();
     let content = std::fs::read_to_string(&processing).unwrap_or_default();
     let v: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
     let mode = v["mode"].as_str().unwrap_or("");
@@ -173,13 +186,13 @@ fn handle_task(processing: std::path::PathBuf) {
         }
     }
     let _ = std::fs::remove_file(&processing);
-    let _ = std::fs::remove_file(format!("/tmp/flash-cancel-{id}"));
-    let _ = log_line(daemon_log, &json!({"event": "task-done"}));
+    let _ = std::fs::remove_file(work_dir().join(format!("flash-cancel-{id}")));
+    let _ = log_line(daemon_log.as_str(), &json!({"event": "task-done"}));
 }
 
 /// GUI 通过写 /tmp/flash-cancel-<id> 文件请求取消任务
 fn cancelled_flag(task_id: &str) -> bool {
-    std::path::Path::new(&format!("/tmp/flash-cancel-{task_id}")).exists()
+    work_dir().join(format!("flash-cancel-{task_id}")).exists()
 }
 
 fn check_cancelled(task_id: &str, log: &str) -> Result<(), String> {
@@ -192,7 +205,7 @@ fn check_cancelled(task_id: &str, log: &str) -> Result<(), String> {
 
 /// 单实例保护：如果已有存活实例（pid 文件中的进程仍存在），当前实例退出
 fn claim_single_instance() -> bool {
-    if let Ok(content) = std::fs::read_to_string("/tmp/flash-helper.pid") {
+    if let Ok(content) = std::fs::read_to_string(pid_path().to_string_lossy().into_owned()) {
         if let Ok(pid) = content.trim().parse::<i32>() {
             if pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0 {
                 return false;
@@ -444,7 +457,7 @@ fn dd_io(log: &str, stage: &str, input: &str, output: &str, total: u64, task_id:
     }
 
     if total % DD_BS != 0 {
-        let tmp_tail = format!("/tmp/flash-helper-tail-{}.bin", std::process::id());
+        let tmp_tail = work_dir().join(format!("flash-helper-tail-{}.bin", std::process::id())).to_string_lossy().into_owned();
         let rem = total - tail_off;
         let mut f = File::open(input).map_err(|e| format!("无法打开镜像: {e}"))?;
         std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(tail_off))
@@ -500,7 +513,13 @@ fn unmount_device(device_path: &str) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn unmount_device(_device_path: &str) {
+    // Windows 上写入挂载卷需要先卸载卷；此处保留空实现，
+    // 若 WriteFile 因卷占用失败会返回明确错误提示
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn unmount_device(_device_path: &str) {}
 
 /// 通过 diskutil（Apple 二进制）获取设备大小，避免直接 open 设备被 TCC 拦截
@@ -535,7 +554,52 @@ fn device_size(device_path: &str) -> Result<u64, String> {
     Err("无法获取设备大小（diskutil 输出解析失败）".to_string())
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows：通过 IOCTL_DISK_GET_LENGTH_INFO 获取磁盘大小
+#[cfg(target_os = "windows")]
+fn device_size(device_path: &str) -> Result<u64, String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, HANDLE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, DeviceIoControl, GENERIC_READ, OPEN_EXISTING, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+    unsafe {
+        let wide: Vec<u16> = device_path
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let handle = CreateFileW(
+            wide.as_ptr(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(format!("无法打开设备 {device_path}"));
+        }
+        let mut length: i64 = 0;
+        let mut returned: u32 = 0;
+        let ok = DeviceIoControl(
+            handle,
+            0x0007405C, // IOCTL_DISK_GET_LENGTH_INFO
+            std::ptr::null(),
+            0,
+            &mut length as *mut _ as *mut _,
+            std::mem::size_of::<i64>() as u32,
+            &mut returned,
+            std::ptr::null_mut(),
+        );
+        let _ = CloseHandle(handle);
+        if ok == 0 {
+            return Err("无法获取设备大小（IOCTL 失败）".to_string());
+        }
+        Ok(length as u64)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn device_size(_path: &str) -> Result<u64, String> {
     Err("此平台暂不支持导出功能".to_string())
 }

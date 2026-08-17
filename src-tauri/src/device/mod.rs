@@ -28,7 +28,15 @@ pub fn list_devices() -> Result<Vec<Device>, String> {
     macos::list_devices()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+mod windows;
+
+#[cfg(target_os = "windows")]
+pub fn list_devices() -> Result<Vec<Device>, String> {
+    windows::list_devices()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn list_devices() -> Result<Vec<Device>, String> {
     Err("设备发现暂未在此平台实现".to_string())
 }

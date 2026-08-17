@@ -8,6 +8,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
+/// 任务/日志/信号文件的共享工作目录。
+/// macOS 固定用 /tmp（与守护进程扫描目录一致）；其他平台用系统临时目录。
+pub fn work_dir() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ProgressPayload {
     pub task_id: u64,
@@ -72,7 +82,7 @@ impl TaskQueue {
 
         // 并发数（1-8，默认 3）：写入 /tmp/flash-concurrency 供守护进程读取
         let concurrency = req.concurrency.unwrap_or(3).clamp(1, 8) as usize;
-        let _ = std::fs::write("/tmp/flash-concurrency", concurrency.to_string());
+        let _ = std::fs::write(work_dir().join("flash-concurrency"), concurrency.to_string());
 
         let mut inner = self.inner.lock().unwrap();
         let mut ids = Vec::with_capacity(req.device_paths.len());
