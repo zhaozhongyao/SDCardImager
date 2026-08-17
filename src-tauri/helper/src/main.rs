@@ -541,14 +541,14 @@ fn unmount_device(_device_path: &str) {
 /// Linux：卸载设备上的所有挂载分区（umount，daemon 以 root 运行）
 #[cfg(target_os = "linux")]
 fn unmount_device(device_path: &str) {
-    // 设备名如 /dev/sdb -> 分区 /dev/sdb1.. 或 mmcblk0p1
+    let base = dev_basename(device_path);
     if let Ok(entries) = std::fs::read_dir("/dev") {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if name == dev_basename(device_path) {
+            if name == base {
                 continue;
             }
-            if name.starts_with(dev_basename(device_path)) {
+            if name.starts_with(&base) {
                 let part = format!("/dev/{}", name);
                 let _ = Command::new("umount").arg(&part).output();
             }
