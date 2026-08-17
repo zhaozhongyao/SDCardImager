@@ -576,12 +576,13 @@ fn device_size(device_path: &str) -> Result<u64, String> {
 /// Windows：通过 IOCTL_DISK_GET_LENGTH_INFO 获取磁盘大小
 #[cfg(target_os = "windows")]
 fn device_size(device_path: &str) -> Result<u64, String> {
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE,
+    };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, OPEN_EXISTING, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
-    use windows_sys::Win32::System::IO::GENERIC_READ;
-    use windows_sys::Win32::System::Ioctl::DeviceIoControl;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
     unsafe {
         let wide: Vec<u16> = device_path
             .encode_utf16()
